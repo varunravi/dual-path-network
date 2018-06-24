@@ -10,6 +10,25 @@ import tensorflow as tf
 
 
 
+def micro_block(layer, final_filter_size, num_iterations, activation=tf.nn.relu):
+
+	layer_dense_path = tf.placeholder(tf.float32)
+	layer_res_path = tf.placeholder(tf.float32)
+
+	layer_dense_path = layer
+	layer_res_path = layer
+	
+	
+	for i in range(0, num_iterations):
+		layer = tf.layers.conv2d(layer, final_filter_size/(2+2/3), (1,1), activation=activation)
+		layer = tf.layers.conv2d(layer, final_filter_size/(2+2/3), (3,3), activation=activation)
+		layer = tf.layers.conv2d(layer, final_filter_size, (1,1), activation=activation)
+
+	layer_dense_path = tf.image.resize_nearest_neighbor(layer_dense_path, (layer.get_shape().as_list()[1],layer.get_shape().as_list()[2]))
+	layer_res_path = tf.image.resize_nearest_neighbor(layer_res_path, (layer.get_shape().as_list()[1],layer.get_shape().as_list()[2]))
+	
+
+	return tf.concat([layer, layer_dense_path, layer_res_path], axis=-1)
 
 
 def dpn(X_train, y_train, activation=tf.nn.relu):
@@ -20,37 +39,18 @@ def dpn(X_train, y_train, activation=tf.nn.relu):
 	# conv1
 	conv1 = tf.layers.conv2d(x, 64, (7,7), activation=activation)
 	
-
 	# conv2
 	conv2 = tf.layers.conv2d(conv1, 64, (3,3), activation=activation)
 	conv2 = tf.layers.max_pooling2d(inputs=conv1, pool_size=(3,3), strides=2)
-	for i in range(0, 3):
-		conv2 = tf.layers.conv2d(conv2, 96, (1,1), activation=activation)
-		conv2 = tf.layers.conv2d(conv1, 96, (3,3), activation=activation)
-		conv2 = tf.layers.conv2d(conv2, 256, (1,1), activation=activation)
+	
+	conv2 = micro_block(conv2, 256, 3)
+	conv3 = micro_block(conv2, 512, 4)
+	conv4 = micro_block(conv3, 1024, 20)
+	conv5 = micro_block(conv4, 2048, 3)
 
-	# conv3
-	for i in range(0, 4):
-		conv2 = tf.layers.conv2d(conv2, 192, (1,1), activation=activation)
-		conv2 = tf.layers.conv2d(conv1, 192, (3,3), activation=activation)
-		conv2 = tf.layers.conv2d(conv2, 512, (1,1), activation=activation)
-
-	# conv4
-	for i in range(0, 20):
-		conv3 = tf.layers.conv2d(conv2, 384, (1,1), activation=activation)
-		conv3 = tf.layers.conv2d(conv1, 384, (3,3), activation=activation)
-		conv3 = tf.layers.conv2d(conv2, 1024, (1,1), activation=activation)
-
-	# conv5
-	for i in range(0, 3):
-		conv4 = tf.layers.conv2d(conv2, 768, (1,1), activation=activation)
-		conv4 = tf.layers.conv2d(conv1, 768, (3,3), activation=activation)
-		conv4 = tf.layers.conv2d(conv2, 2048, (1,1), activation=activation)
-
-	final = tf.layers.conv2d(up_conv4, 2, 1, activation=tf.nn.softmax)
+	final = tf.layers.conv2d(conv5, 2, 1, activation=tf.nn.softmax)
 
 	ipdb.set_trace()
-
 
 
 if __name__ == '__main__':
