@@ -1,0 +1,2 @@
+model_checkpoint_path: "dpn_results-tf"
+all_model_checkpoint_paths: "dpn_results-tf"

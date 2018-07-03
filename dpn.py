@@ -1,167 +1,170 @@
 # Varun Ravi
 # dpn.py
+# 6/28/18
 
-import numpy as np
-import matplotlib.image as mpimg
-import matplotlib.pyplot as plt
 import ipdb
-import os
 import tensorflow as tf
-from tensorflow.examples.tutorials.mnist import input_data
-BATCH_SIZE = 32
-
-def res_net(layer, filter_size, padding='same'):
-
-	layer = tf.layers.conv2d(layer, filter_size, (3,3),activation=tf.nn.relu, padding=padding)
-	layer = tf.layers.conv2d(layer, filter_size,(3,3), padding=padding)
-
-	return layer
-
-# def dense_net():
+import numpy as np
+from keras.datasets import cifar100
 
 
+EPOCHS = 1
+BATCH_SIZE = 8
+DATA = 'places365'
+X_SHAPE = [None,32,32,3]
+y_SHAPE = [None,10]
+CARDINALITY = 32
 
-def micro_block(layer, final_filter_size, num_iterations, cardinality=32, activation=None, padding='same'):
 
-	for i in range (0, num_iterations):
-		initial_filter_size = final_filter_size / (2+2/3)
+def get_data(data):
 
-		layer = tf.layers.conv2d(layer, initial_filter_size, (1,1), activation=activation, padding=padding)
+	if data == 'cifar100':
+		(train_data, train_labels), (eval_data, eval_labels) = tf.keras.datasets.cifar10.load_data()
+		train_labels = one_hot(train_labels, (50000,10))
+		eval_labels = one_hot(eval_labels, (50000,10))
+
+	if data == 'cifar10':
+		(train_data, train_labels), (eval_data, eval_labels) = tf.keras.datasets.cifar10.load_data()
+		train_labels = one_hot(train_labels, (50000,10))
+		eval_labels = one_hot(eval_labels, (50000,10))
+
+	if data == 'places365':
+		train_data = np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/images_batch_20.npy')
+		#train_data = np.concatenate((train_data, np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/images_batch_40.npy')))
+		#train_data = np.concatenate((train_data, np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/images_batch_80.npy')))
 		
-		layer_G = []
-		for i in range(0, 32):
-			layer_G.append(tf.layers.conv2d(layer, initial_filter_size, (3,3), activation=activation, padding=padding))
+		train_labels = np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/keys_batch_20.npy')
+		#train_labels = np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/keys_batch_40.npy')
+		#train_labels = np.load('/home/varun/datasets/places365/places365standard_easyformat/places365_standard/keys_batch_80.npy')
 		#ipdb.set_trace()
-		layer = tf.concat(values=layer_G, axis=3, name='concat')
-		layer = tf.layers.conv2d(layer, 256, (1,1), activation=activation, padding=padding)
+		train_labels = one_hot(train_labels, (1901,365))
+		eval_data = None
+		eval_labels = None
+		
+	return train_data[:5], train_labels[:5], eval_data, eval_labels
 
+def one_hot(labels, shape):
+	one_hot= np.zeros(shape)
+	pos=0
 
+	for i in labels:
+		one_hot[pos][i] = 1
+		pos+=1
+
+	return one_hot
+
+def macro_block(inputs, filter_size, iterations, cardinality=CARDINALITY):
+	
+	inputs_G = []
+
+	for i in range(cardinality):
+		inputs_G.append(micro_block(inputs, filter_size, iterations))
+	
+	inputs_final = tf.concat(values=inputs_G, axis=3, name='concat')
+
+	return inputs_final
+
+def micro_block(inputs, final_filter, iters, padding='same'):
+
+	small_filter = final_filter/(2+2/3)
+
+	for i in range(iters):
+		inputs = tf.layers.conv2d(inputs=inputs, filters=small_filter, kernel_size=(1,1), padding=padding)
+		inputs = tf.layers.conv2d(inputs=inputs, filters=small_filter, kernel_size=(3,3), padding=padding)
+		inputs = tf.layers.conv2d(inputs=inputs, filters=final_filter, kernel_size=(1,1), padding=padding)
+
+	return inputs
+
+def model(x,y):
+
+	for d in ['/device:GPU:0', '/device:GPU:1']:
+		with tf.device(d):
+
+			conv2_G = []
+
+			inputs = tf.layers.conv2d(inputs=x, filters=64, kernel_size=(7,7), strides=(2,2), padding='same')
+			layer = tf.layers.max_pooling2d(inputs=inputs, pool_size=(3,3), strides=2)
+
+			layer = macro_block(inputs=layer, filter_size=256, iterations=3)
+			res_layer = layer
+			dense_layer = layer
+
+			layer = macro_block(inputs=layer, filter_size=512, iterations=4)
+			layer_r = layer[:,:,:,:res_layer.shape[3]]
+			res_layer = tf.add(res_layer,layer_r)
+			dense_layer = tf.concat([dense_layer,layer], axis=3)
+			layer = tf.concat([res_layer,dense_layer], axis=3)
+
+			layer = macro_block(inputs=layer, filter_size=1024, iterations=20)
+			layer_r = layer[:,:,:,:res_layer.shape[3]]
+			res_layer = tf.add(res_layer,layer_r)
+			dense_layer = tf.concat([dense_layer,layer], axis=3)
+			layer = tf.concat([res_layer,dense_layer], axis=3)
+
+			layer = macro_block(inputs=layer, filter_size=2048, iterations=3)
+			layer_r = layer[:,:,:,:res_layer.shape[3]]
+			res_layer = tf.add(res_layer,layer_r)
+			dense_layer = tf.concat([dense_layer,layer], axis=3)
+			layer = tf.concat([res_layer,dense_layer], axis=3)
+
+			layer = tf.layers.average_pooling2d(layer, (2,2), 2, padding='same')
+			layer = tf.contrib.layers.flatten(layer)
+			layer = tf.layers.dense(inputs=layer, units=1000, activation=tf.nn.relu)
+			layer = tf.layers.dense(inputs=layer, units=100)
+			#layer = tf.layers.dense(inputs=layer, units=100, activation=tf.nn.softmax)
 
 	return layer
-
-def macro_block(dense_net, layer, filter_size, micro_iter):
-	
-	layer = micro_block(layer, filter_size, micro_iter)
-	res_layer = res_net(layer, filter_size)
-	dense_layer = tf.concat([dense_net, layer], axis=3)
-	layer = tf.concat([dense_layer, res_layer], axis=3)
-
-	return [layer,dense_layer]
-
-def dpn2(x=None, activation=tf.nn.relu):
-
-	# mnist = tf.contrib.learn.datasets.load_dataset("mnist", one_hot=True)
-	mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
-	train_data = mnist.train.images # Returns np.array
-	train_labels = np.asarray(mnist.train.labels)
-	eval_data = mnist.test.images # Returns np.array
-	eval_labels = np.asarray(mnist.test.labels)
-
-
-	
-	x = tf.placeholder(tf.float32, shape=[None, img_height, img_width, num_channels], name='x')
-	y = tf.placeholder(tf.float32, [None, 10], 'y')
-
-	#with tf.Graph().as_default() as graph:
-
-	# x = tf.placeholder(tf.float32, shape=[None, img_height, img_width, num_channels], name='x')
-	# y = tf.placeholder(tf.float32, [None, 1], 'y')
-	
-	conv1 = tf.layers.conv2d(x, 64, (7,7), (2,2), activation=activation, padding='same')
-	layer = tf.contrib.layers.flatten(conv1)
-	layer = tf.contrib.layers.fully_connected(layer, 1000)		# conv1
-	final = tf.contrib.layers.fully_connected(layer, 10)
-
-	#loss_op = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=tf.cast(tf.argmax(final, output_type=tf.int32), dtype=tf.float32), labels=tf.cast(y, dtype=tf.float32)))
-		#loss_op = tf.nn.softmax(dpn_model)
-
-	return x, y, final
-
-def dpn(x=None, activation=tf.nn.relu):
-	
-	img_height = 28
-	img_width = 28
-	num_channels = 1
-	y_shape = 55000
-
-	x = tf.placeholder(tf.float32, shape=[None, img_height, img_width, num_channels], name='x')
-	y = tf.placeholder(tf.float32, [None, 10], 'y')
-
-	# conv1
-	conv1 = tf.layers.conv2d(x, 64, (7,7), (2,2), activation=activation, padding='same')
-	conv2 = tf.layers.max_pooling2d(inputs=conv1, pool_size=(3,3), strides=2, padding='same')
-
-	# conv2
-	conv2 = micro_block(conv2, 256, 3)
-	res_conv2 = res_net(conv2, 256)
-	dense_net = conv2
-	conv2 = tf.concat([res_conv2, conv2], axis=3)
-
-	layer, dense_net = macro_block(dense_net, conv2, 512, 4)
-	layer, dense_net = macro_block(dense_net, layer, 1024, 20)
-	layer, _ = macro_block(dense_net, layer, 2048, 3)
-
-	layer = tf.layers.average_pooling2d(layer, (2,2), 2)
-	
-	layer = tf.contrib.layers.flatten(layer)
-	final = tf.contrib.layers.fully_connected(layer, 1000)
-	final = tf.contrib.layers.fully_connected(final, 10)
-
-	return x, y, final
 
 if __name__ == '__main__':
 
-	img_height = 28
-	img_width = 28
-	num_channels = 1
-	y_shape = 55000
+	# dimensions
+	x = tf.placeholder(tf.float32, shape=X_SHAPE, name='x')
+	y = tf.placeholder(tf.float32, shape=y_SHAPE, name='y')
 
-	mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
-	train_data = mnist.train.images # Returns np.array
-	train_labels = np.asarray(mnist.train.labels)
-	eval_data = mnist.test.images # Returns np.array
-	eval_labels = np.asarray(mnist.test.labels)
+	# data
+	train_data, train_labels, eval_data, eval_labels = get_data(DATA)
+	#ipdb.set_trace()
+	# model, loss & activation functions
+	model = model(x,y)
 
-	train_data = train_data.reshape(55000,img_height,img_width,num_channels)
-	eval_data = eval_data.reshape(10000,img_height,img_width,num_channels)	
-	
-	x, y, final = dpn()
+	loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=model, labels=y))
+	optimize = tf.train.GradientDescentOptimizer(learning_rate=1e-4).minimize(loss)
 
-	loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=final, labels=y))
-	train = tf.train.GradientDescentOptimizer(learning_rate=1e-4).minimize(loss)
-
+	# training
 	init = tf.global_variables_initializer()	
+	saver = tf.train.Saver()
+	config = tf.ConfigProto()
+	config.gpu_options.allow_growth = True
+	config.log_device_placement=True
+	#config.gpu_options.per_process_gpu_memory_fraction = 0.7
 
-	with tf.Session() as session:
+	with tf.Session(config=config) as session:
 		session.run(init)
-		for epoch in range(0, 2):
+		for epoch in range(0, EPOCHS):
 			total_steps = int(len(train_data)/BATCH_SIZE)
-			for step in range(total_steps):
+			#total_steps=200
+			for step in range(200):
 				start = step*BATCH_SIZE
-				end = start + BATCH_SIZE
+				end = start+BATCH_SIZE
 				X_batch = train_data[start:end]
 				y_batch = train_labels[start:end]
-
-				_, training_loss = session.run([train, loss], feed_dict={x: X_batch, y: y_batch})
 				
-				print (step+1, total_steps, training_loss)
+				_, training_loss = session.run([optimize, loss], feed_dict={x: X_batch, y: y_batch})
+				
+				print ("Steps %d/%d, Training Loss=%f" % (step+1, total_steps, training_loss))
 
-			total_steps = int (len(eval_data)/BATCH_SIZE)
+			total_steps = int(len(eval_data)/BATCH_SIZE)
 			total_loss = 0
-			for step in range(total_steps):
+			for step in range(20):
 				start = step*BATCH_SIZE
 				end = start + BATCH_SIZE
 				X_batch = eval_data[start:end]
 				y_batch = eval_labels[start:end]
 				valid_loss = session.run(loss, feed_dict={x: X_batch, y: y_batch})
-				total_loss += valid_loss	
+				total_loss += valid_loss
+				print ("Steps %d/%d, Validation Loss=%f" % (step+1, total_steps, valid_loss))
 			valid_loss = total_loss / total_steps
 			print ("Epoch %d, Training Loss = %d, Validation Loss = %d" % (epoch, training_loss, valid_loss))
-		#saver.save(session, './dpn_results-tf')
+		saver.save(session, './dpn_results-tf')
 
-
-
-	#ipdb.set_trace()
-
-	
-
+		
